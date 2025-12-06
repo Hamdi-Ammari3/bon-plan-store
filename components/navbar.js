@@ -1,0 +1,431 @@
+import React,{useEffect,useState} from 'react'
+import { doc, updateDoc, getDoc, collection, addDoc,Timestamp,runTransaction } from "firebase/firestore"
+import { DB } from '../firebaseConfig'
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage'
+import dayjs from 'dayjs'
+import imageCompression from "browser-image-compression"
+import { CiLogout } from "react-icons/ci"
+import { IoMdAdd } from "react-icons/io"
+import { IoMdCloseCircleOutline } from "react-icons/io"
+import { useRouter } from 'next/navigation'
+import { Modal } from "antd"
+import ClipLoader from "react-spinners/ClipLoader"
+
+const Navbar = ({postLimit,postLength}) => {
+    const router = useRouter()
+    const [userName,setUserName] = useState('')
+    const [isLoggingOut,setIsLoggingOUt] = useState(false)
+    const [openAddingNewPostModal,setOpenAddingNewPostModal] = useState(false)
+    const [openAddingNewPostModalLoading,setOpenAddingNewPostModalLoading] = useState(false)
+    const [productName,setProductName] = useState('')
+    const [selectedImages, setSelectedImages] = useState([])
+    const [imageFiles, setImageFiles] = useState([])
+    const [discountType,setDiscountType] = useState('price')
+    const [oldPrice,setOldPrice] = useState(0)
+    const [newPrice,setNewPrice] = useState(0)
+    const [percentageAmount,setPercentageAmount] = useState(0)
+    const [creatingPostLoading, setCreatingPostLoading] = useState(false)
+
+    useEffect(() => {
+        const storedName = localStorage.getItem('shopName');
+        setUserName(storedName)
+    }, [])
+
+    //Logout handler
+    const logoutHandler = () => {
+        setIsLoggingOUt(true)
+        try {
+            localStorage.removeItem('shopLoggedIn')
+            localStorage.removeItem('shopName')
+            router.push('/login');
+        } catch (error) {
+            console.log(error)
+        } finally {
+            setIsLoggingOUt(false)
+        }
+    }
+
+    //Open create new post modal
+    const openAddNewPostModalHandler = async () => {
+        try {
+            setOpenAddingNewPostModalLoading(true)
+            const shopId = localStorage.getItem('shopID');
+            if (!shopId) {
+                alert("حدث خطأ أثناء تحديد الحساب، يرجى إعادة تسجيل الدخول");
+                return;
+            }
+
+            // Get the shop document
+            const shopRef = doc(DB, "shops", shopId);
+            const shopSnap = await getDoc(shopRef);
+
+            if (!shopSnap.exists()) {
+                alert("لم يتم العثور على بيانات المتجر");
+                return;
+            }
+
+            const shopData = shopSnap.data();
+            const postIds = shopData.posts || [];
+
+            // Check plan limit
+            if (postLength >= postLimit) {
+                alert(`لقد وصلت للحد الأقصى للمنشورات في خطتك الحالية . يرجى الاشتراك لإضافة منشورات أكثر.`);
+                return;
+            }
+
+            // No posts yet → allow opening
+            if (postLength === 0) {
+                setOpenAddingNewPostModal(true);
+                return;
+            }
+
+
+            // Get last (most recent) post
+            const lastPostObj = postIds[0];
+            const lastPostRef = doc(DB, "posts", lastPostObj.id);
+            const lastPostSnap = await getDoc(lastPostRef);
+
+            if (!lastPostSnap.exists()) {
+                setOpenAddingNewPostModal(true);
+                return;
+            }
+
+            const lastPost = lastPostSnap.data();
+            const now = Timestamp.now();
+
+            if (lastPostObj.end_date.toMillis() > now.toMillis() && !lastPost.canceled) {
+                alert("يوجد منشور نشط حاليا، يرجى الانتظار حتى انتهاء المنشور الحالي قبل إضافة منشور جديد.");
+                return;
+            }
+
+            // Otherwise, open the modal
+            setOpenAddingNewPostModal(true);
+
+        } catch (error) {
+            console.log("Error checking active post:", error);
+            alert("حدث خطأ أثناء التحقق من حالة المنشور");
+        } finally{
+            setOpenAddingNewPostModalLoading(false);
+        }
+    }
+
+    //Create new post
+    const createNewPost = async () => {
+        const shopId = localStorage.getItem("shopID");
+        const shopName = localStorage.getItem("shopName");
+
+        if (!productName.trim()) {
+            alert("يرجى إدخال اسم المنتج");
+            return;
+        }
+
+        if (!imageFiles?.length) {
+            alert("يرجى اضافة صورة المنتج");
+            return;
+        }
+
+        if (discountType === "price" && (!oldPrice || !newPrice)) {
+            alert("يرجى إدخال المبالغ");
+            return;
+        }
+
+        if (discountType === "percentage" && !percentageAmount) {
+            alert("يرجى إدخال نسبة التخفيض");
+            return;
+        }
+
+        try {
+            setCreatingPostLoading(true);
+
+            const shopRef = doc(DB, "shops", shopId);
+            const shopSnap = await getDoc(shopRef);
+            if (!shopSnap.exists()) {
+                alert("بيانات المتجر غير موجودة");
+                return;
+            }
+
+            const shopData = shopSnap.data();
+
+            const startDate = Timestamp.fromDate(dayjs().toDate());
+            const endDate = Timestamp.fromDate(dayjs().add(7, "day").toDate());
+
+            const storage = getStorage();
+            const imageUrls = [];
+
+            //Upload all images and get URLs
+            for (const file of imageFiles) {
+                const storageRef = ref(storage, `posts/${shopId}/${Date.now()}_${file.name}`);
+                await uploadBytes(storageRef, file);
+                const downloadURL = await getDownloadURL(storageRef);
+                imageUrls.push(downloadURL);
+            }
+
+            //Generate and upload thumbnail from the first image
+            const firstFile = imageFiles[0];
+            let thumbnailUrl = imageUrls[0];
+
+            if (firstFile) {
+                try {
+                    const compressed = await imageCompression(firstFile, {
+                        maxWidthOrHeight: 100,
+                        useWebWorker: true,
+                        maxSizeMB: 0.05,
+                    });
+
+                    const thumbRef = ref(storage, `posts/${shopId}/thumb_${Date.now()}_${firstFile.name}`);
+                    await uploadBytes(thumbRef, compressed);
+                    thumbnailUrl = await getDownloadURL(thumbRef);
+                } catch (thumbErr) {
+                    console.log("Thumbnail compression failed:", thumbErr);
+                }
+            }
+
+            //Atomic transaction
+            await runTransaction(DB, async (transaction) => {
+                const shopDoc = await transaction.get(shopRef);
+                if (!shopDoc.exists()) throw new Error("Shop not found during transaction");
+
+                const shopDataTx = shopDoc.data();
+
+                // Deactivate old active post if exists
+                if (shopDataTx.active_post_id) {
+                    const oldPostRef = doc(DB, "posts", shopDataTx.active_post_id);
+                    transaction.update(oldPostRef, { isActive: false });
+                }
+
+                //Create new post document
+                const newPostRef = doc(collection(DB, "posts"));
+                transaction.set(newPostRef, {
+                    prod_name: productName,
+                    category: shopDataTx?.category,
+                    address: shopDataTx?.address,
+                    phone: shopDataTx?.phone,
+                    thumbnail: thumbnailUrl,
+                    images: imageUrls,
+                    discount_type: discountType,
+                    ...(discountType === "price"
+                    ? { old_price: Number(oldPrice), new_price: Number(newPrice) }
+                    : { percentage: Number(percentageAmount) }),
+                    start_date: startDate,
+                    end_date: endDate,
+                    shop_name: shopName,
+                    location: shopDataTx?.location,
+                    shop_id: shopId,
+                    isActive: true,
+                    canceled: false,
+                    createdAt: Timestamp.now(),
+                });
+
+                const newPostEntry = { id: newPostRef.id, end_date: endDate };
+                const updatedPosts = [newPostEntry, ...(shopDataTx.posts || [])];
+
+                //Update shop
+                transaction.update(shopRef, {
+                    posts: updatedPosts,
+                    active_post_id: newPostRef.id,
+                });
+            });
+
+            //Reset form
+            setProductName("");
+            setOldPrice(0);
+            setNewPrice(0);
+            setPercentageAmount(0);
+            setDiscountType("price");
+            setImageFiles([]);
+            setSelectedImages([]);
+            setOpenAddingNewPostModal(false);
+
+            alert('تم إضافة المنشور بنجاح ✅');
+        } catch (err) {
+            console.log("Error creating post:", err);
+            alert("حدث خطأ أثناء إنشاء المنشور، لم يتم حفظ التغييرات.");
+        } finally {
+            setCreatingPostLoading(false);
+        }
+    }
+
+    return (
+        <div className='navbar'>
+            <div className='add-new-post-box'>
+                {openAddingNewPostModalLoading ? (
+                    <div>
+                        <ClipLoader
+                            color={'#000'}
+                            loading={openAddingNewPostModalLoading}
+                            size={10}
+                            aria-label="Loading Spinner"
+                            data-testid="loader"
+                        />
+                    </div>
+                ) : (
+                    <div onClick={openAddNewPostModalHandler}>
+                        <p>اضف منشور</p>
+                        <IoMdAdd style={{color:'#000',fontSize:20}}/>
+                    </div>
+                )}
+            </div>
+            <Modal
+                title={'اضافة منشور جديد'}
+                open={openAddingNewPostModal}
+                onCancel={() => setOpenAddingNewPostModal(false)}
+                centered
+                footer={null}
+            >
+                <div className='creating-new-post-modal'>
+                    <div className='creating-new-post-form'>
+                        <div className='creating-new-post-form-item-name'>
+                            <input
+                                placeholder='اسم المنتج'
+                                type='text'
+                                value={productName}
+                                onChange={(e) => setProductName(e.target.value)} 
+                            />
+                        </div>
+
+                        <div className='adding-new-image-input-box'>
+                            <label htmlFor="image-upload" className="custom-upload-button">
+                                إضافة صور
+                            </label>
+                            <input
+                                id="image-upload"
+                                type="file"
+                                multiple
+                                accept="image/*"
+                                style={{ display: 'none' }}
+                                onChange={(e) => {
+                                    const files = Array.from(e.target.files);
+                                    const newFiles = [...imageFiles, ...files];
+                                    setImageFiles(newFiles);
+
+                                    const newPreviews = newFiles.map(file => URL.createObjectURL(file));
+                                    setSelectedImages(newPreviews);
+                                }}
+                            />
+                        </div>
+
+                        {selectedImages.length > 0 && (
+                            <div className='images-thumbs-box'>
+                                <div className='images-slider'>
+                                    {selectedImages.map((src, idx) => (
+                                        <div key={idx} className='image-thumb-item'>
+                                            <img src={src} alt="Preview" />
+                                            <IoMdCloseCircleOutline 
+                                                className='remove-thumb'
+                                                onClick={() => {
+                                                    const updatedFiles = imageFiles.filter((_, i) => i !== idx);
+                                                    const updatedPreviews = selectedImages.filter((_, i) => i !== idx);
+                                                    setImageFiles(updatedFiles);
+                                                    setSelectedImages(updatedPreviews);
+                                                }}
+                                            />                                           
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        
+                        <div className='creating-new-post-form-toggle'>
+                            <div>
+                                <input
+                                    type='radio'
+                                    value='price'
+                                    checked={discountType === 'price'}
+                                    onChange={() => setDiscountType('price')}
+                                />
+                                <h5>مبلغ مالي</h5>
+                            </div>
+                            <div>
+                                <input
+                                    type='radio'
+                                    value='percentage'
+                                    checked={discountType === 'percentage'}
+                                    onChange={() => setDiscountType('percentage')}
+                                />
+                                <h5>نسبة مئوية</h5>
+                            </div>
+                        </div>
+
+                        {discountType === 'price' ? (
+                            <div className='creating-new-post-form-discount-value'>
+                                <div>
+                                    <input
+                                        type='number'
+                                        placeholder='المبلغ القديم'
+                                        value={oldPrice}
+                                        onChange={(e) => setOldPrice(e.target.value)}
+                                    />
+                                    <h5 style={{marginBottom:'7px'}}>المبلغ القديم</h5>
+                                </div>
+                                <div>
+                                    <input
+                                        type='number'
+                                        placeholder='المبلغ الجديد'
+                                        value={newPrice}
+                                        onChange={(e) => setNewPrice(e.target.value)}
+                                    />
+                                    <h5 style={{marginBottom:'7px'}}>المبلغ الجديد</h5>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className='creating-new-post-form-discount-value'>
+                                <div>
+                                    <input
+                                        type='number'
+                                        placeholder='نسبة التخفيض'
+                                        value={percentageAmount}
+                                        onChange={(e) => setPercentageAmount(e.target.value)}
+                                    />
+                                    <div className='creating-new-post-form-discount-value' style={{gap:'3px',marginBottom:'7px'}}>
+                                        <h5>نسبة التخفيض</h5>
+                                        <h5>%</h5>
+                                    </div>                                   
+                                </div>
+                            </div>
+                        )}
+                        {creatingPostLoading ? (
+                            <div className='add-new-post-button' >
+                                <ClipLoader
+                                    color={'#000'}
+                                    loading={creatingPostLoading}
+                                    size={10}
+                                    aria-label="Loading Spinner"
+                                    data-testid="loader"
+                                />
+                            </div>
+                        ) : (
+                            <button
+                                onClick={createNewPost}
+                                disabled={creatingPostLoading}
+                                className='add-new-post-button'                                
+                            >
+                                أضف
+                            </button>  
+                        )}   
+                    </div>
+                </div>
+            </Modal>
+            <div className='navbar_user_box'>
+                <h5>{userName}</h5>
+                {isLoggingOut ? (
+                    <div style={{ width:'70px',padding:'7px 0',marginRight:'50px', backgroundColor:'#cccc',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        <ClipLoader
+                            color={'#fff'}
+                            loading={isLoggingOut}
+                            size={10}
+                            aria-label="Loading Spinner"
+                            data-testid="loader"
+                        />
+                    </div>
+                ) : (
+                    <button onClick={logoutHandler}>
+                        <p>خروج</p>
+                        <CiLogout style={{color:'#000',fontSize:15}}/>
+                    </button>
+                )}        
+            </div>
+        </div>
+    )
+}
+
+export default Navbar
