@@ -49,14 +49,24 @@ const page = () => {
         const postObjects = shopData.posts || [];
 
         // Determine plan limit
-        const now = Timestamp.now();
         let limit = 0;
+        const now = Timestamp.now();
+
+        // FREE PLAN
         if (shopData.plan === "free") {
           limit = 3;
-        } else if (shopData.plan === "paid") {
+        } 
+
+        // PAID PLAN
+        else if (shopData.plan === "paid") {
           const subsEnd = shopData.subs_period?.end;
-          if (subsEnd && subsEnd.toMillis() > now.toMillis()) {
-            limit = 100;
+
+          if (!subsEnd || subsEnd.toMillis() <= now.toMillis()) {
+            // subscription expired
+            limit = 0;
+          } else {
+            // subscription active
+            limit = 100; // yearly limit
           }
         }
 

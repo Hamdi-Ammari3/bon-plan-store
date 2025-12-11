@@ -56,8 +56,8 @@ const page = () => {
                 <div className='form-title-box'>
                     <Image
                         src={logo_image}
-                        width={60}
-                        height={60}
+                        width={80}
+                        height={80}
                         alt='logo image'
                         style={{objectFit:'contain',borderRadius:50}}
                     />

@@ -48,14 +48,14 @@ const Navbar = ({postLimit,postLength}) => {
     //Open create new post modal
     const openAddNewPostModalHandler = async () => {
         try {
-            setOpenAddingNewPostModalLoading(true)
+            setOpenAddingNewPostModalLoading(true);
+
             const shopId = localStorage.getItem('shopID');
             if (!shopId) {
                 alert("حدث خطأ أثناء تحديد الحساب، يرجى إعادة تسجيل الدخول");
                 return;
             }
 
-            // Get the shop document
             const shopRef = doc(DB, "shops", shopId);
             const shopSnap = await getDoc(shopRef);
 
@@ -66,45 +66,47 @@ const Navbar = ({postLimit,postLength}) => {
 
             const shopData = shopSnap.data();
             const postIds = shopData.posts || [];
-
-            // Check plan limit
-            if (postLength >= postLimit) {
-                alert(`لقد وصلت للحد الأقصى للمنشورات في خطتك الحالية . يرجى الاشتراك لإضافة منشورات أكثر.`);
-                return;
-            }
-
-            // No posts yet → allow opening
-            if (postLength === 0) {
-                setOpenAddingNewPostModal(true);
-                return;
-            }
-
-
-            // Get last (most recent) post
-            const lastPostObj = postIds[0];
-            const lastPostRef = doc(DB, "posts", lastPostObj.id);
-            const lastPostSnap = await getDoc(lastPostRef);
-
-            if (!lastPostSnap.exists()) {
-                setOpenAddingNewPostModal(true);
-                return;
-            }
-
-            const lastPost = lastPostSnap.data();
             const now = Timestamp.now();
 
-            if (lastPostObj.end_date.toMillis() > now.toMillis() && !lastPost.canceled) {
-                alert("يوجد منشور نشط حاليا، يرجى الانتظار حتى انتهاء المنشور الحالي قبل إضافة منشور جديد.");
+            //SUBSCRIPTION EXPIRED → BLOCK
+            if (shopData.plan === "paid") {
+                const subsEnd = shopData.subs_period?.end;
+
+                if (!subsEnd || subsEnd.toMillis() <= now.toMillis()) {
+                    alert("انتهى اشتراكك السنوي. يرجى تجديد الاشتراك لإضافة منشورات جديدة.");
+                    return;
+                }
+            }
+
+            //CHECK LIMIT (FREE or PAID)
+            if (postLength >= postLimit) {
+                alert("لقد وصلت للحد الأقصى للمنشورات في خطتك الحالية.");
                 return;
             }
 
-            // Otherwise, open the modal
+            // CHECK IF LAST POST IS STILL ACTIVE
+            if (postLength > 0) {
+                const lastPostObj = postIds[0];
+                const lastPostRef = doc(DB, "posts", lastPostObj.id);
+                const lastPostSnap = await getDoc(lastPostRef);
+
+                if (lastPostSnap.exists()) {
+                    const lastPost = lastPostSnap.data();
+
+                    if (lastPostObj.end_date.toMillis() > now.toMillis() && !lastPost.canceled) {
+                        alert("يوجد منشور نشط حاليا، يرجى الانتظار حتى انتهاء المنشور الحالي قبل إضافة منشور جديد.");
+                        return;
+                    }
+                }
+            }
+
+            // OPEN MODAL SAFELY
             setOpenAddingNewPostModal(true);
 
         } catch (error) {
-            console.log("Error checking active post:", error);
+            console.log("Error checking post conditions:", error);
             alert("حدث خطأ أثناء التحقق من حالة المنشور");
-        } finally{
+        } finally {
             setOpenAddingNewPostModalLoading(false);
         }
     }

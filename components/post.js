@@ -112,7 +112,7 @@ const Post = ({post,onUpdatePost }) => {
           await uploadBytes(thumbRef, compressed)
           thumbnailUrl = await getDownloadURL(thumbRef)
         } catch (err) {
-          console.warn("Thumbnail compression failed:", err)
+          console.log("Thumbnail compression failed:", err)
         }
       }
 
